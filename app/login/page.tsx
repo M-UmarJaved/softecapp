@@ -18,7 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 type AuthTab = "sign-in" | "sign-up";
-type AuthAction = "sign-in" | "sign-up" | "google";
+type AuthAction = "sign-in" | "sign-up" | "google" | "magic-link";
 
 const CALLBACK_ERRORS: Record<string, string> = {
   auth_callback_failed: "The sign-in link is invalid or expired. Please request a new one.",
