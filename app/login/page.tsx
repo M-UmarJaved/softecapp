@@ -92,9 +92,16 @@ function LoginPageContent() {
   const [signUpEmail,    setSignUpEmail]    = useState("");
   const [signUpPassword, setSignUpPassword] = useState("");
 
-  const [error,  setError]  = useState<string | null>(
-    CALLBACK_ERRORS[searchParams.get("error") ?? ""] ?? null,
-  );
+  const [error,  setError]  = useState<string | null>(() => {
+    const errKey = searchParams.get("error") ?? "";
+    const reason = searchParams.get("reason");
+    const base = CALLBACK_ERRORS[errKey] ?? null;
+    // Append raw reason in dev so we can diagnose
+    if (base && reason && process.env.NODE_ENV !== "production") {
+      return `${base} (${reason})`;
+    }
+    return base;
+  });
   const [notice, setNotice] = useState<string | null>(null);
   const [toast,  setToast]  = useState<string | null>(null);
 
