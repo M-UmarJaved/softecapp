@@ -702,7 +702,7 @@ export function ResultsView({ data, sessionId }: Props) {
               </div>
             ))}
 
-            <SkippedSection skipped={[]} />
+            <SkippedSection skipped={data.skippedEmails ?? []} />
 
             {/* Session info */}
             <p className="pb-8 text-center text-xs text-muted-foreground">
