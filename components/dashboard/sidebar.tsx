@@ -11,6 +11,8 @@ import {
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
   UsersIcon,
+  ArrowLeftIcon,
+  UserIcon,
 } from "lucide-react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -23,11 +25,12 @@ type NavItem = {
 };
 
 const navItems: NavItem[] = [
-  { label: "Overview",      href: "/dashboard",              icon: HomeIcon },
-  { label: "Analyze",       href: "/analyze",                icon: InboxIcon },
-  { label: "AI Coach",      href: "/dashboard/chat",         icon: MessageSquareIcon },
-  { label: "Insights",      href: "/dashboard/analytics",    icon: BarChart3Icon },
-  { label: "Waitlist",      href: "/dashboard/waitlist",     icon: UsersIcon },
+  { label: "Overview",   href: "/dashboard",          icon: HomeIcon },
+  { label: "Analyze",    href: "/analyze",             icon: InboxIcon },
+  { label: "AI Coach",   href: "/dashboard/chat",      icon: MessageSquareIcon },
+  { label: "Insights",   href: "/dashboard/analytics", icon: BarChart3Icon },
+  { label: "Waitlist",   href: "/dashboard/waitlist",  icon: UsersIcon },
+  { label: "My Profile", href: "/dashboard/profile",   icon: UserIcon },
 ];
 
 function isActive(pathname: string, href: string) {
@@ -110,6 +113,22 @@ export function DashboardSidebar() {
             </Link>
           );
         })}
+
+        {/* Divider + Home link */}
+        <div className="my-2 h-px bg-border/50" />
+        <Link
+          href="/"
+          className={cn(
+            buttonVariants({ variant: "ghost", size: "sm" }),
+            "h-10 w-full text-muted-foreground",
+            collapsed ? "justify-center px-0" : "justify-start px-3 max-md:justify-center max-md:px-0",
+          )}
+        >
+          <ArrowLeftIcon className="size-4 shrink-0" />
+          <span className={cn("truncate", collapsed ? "sr-only" : "max-md:sr-only")}>
+            Back to Home
+          </span>
+        </Link>
       </nav>
     </aside>
   );

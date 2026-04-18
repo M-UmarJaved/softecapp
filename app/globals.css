@@ -285,6 +285,10 @@ body::after {
     from { opacity: 0; transform: translateY(16px); }
     to   { opacity: 1; transform: translateY(0); }
   }
+  @keyframes wordFadeIn {
+    from { opacity: 0; transform: translateY(20px) scale(0.97); filter: blur(4px); }
+    to   { opacity: 1; transform: translateY(0)   scale(1);    filter: blur(0); }
+  }
   @keyframes fadeIn {
     from { opacity: 0; }
     to   { opacity: 1; }
@@ -336,12 +340,13 @@ body::after {
   }
 
   .animate-fade-in-up   { animation: fadeInUp var(--duration-slow) var(--ease-smooth) both; }
+  .animate-word-fade    { animation: wordFadeIn 0.5s cubic-bezier(0.16,1,0.3,1) both; }
   .animate-fade-in      { animation: fadeIn  var(--duration-base)  var(--ease-out)    both; }
   .animate-scale-in     { animation: scaleIn var(--duration-slow)  var(--ease-spring) both; }
   .animate-slide-right  { animation: slideInRight var(--duration-base) var(--ease-smooth) both; }
   .animate-float        { animation: float 3s ease-in-out infinite; }
   .animate-spin-slow    { animation: spin-slow 3s linear infinite; }
-  .animate-ticker       { animation: ticker 20s linear infinite; }
+  .animate-ticker       { animation: ticker 30s linear infinite; }
   .animate-slide-up     { animation: slide-up 0.4s ease both; }
   .animate-bar-fill     { animation: bar-fill 0.7s cubic-bezier(0.4,0,0.2,1) both; }
   .animate-urgent-pulse { animation: urgent-pulse 1.8s ease-in-out infinite; }

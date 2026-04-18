@@ -46,43 +46,61 @@ function scoreProfileFit(
   const matchedSkills: string[] = [];
   const missingRequirements: string[] = [];
 
-  // CGPA match — 10pts
+  // ── Opportunity type match — 12pts (CORE preference factor) ──────────────
+  // This is the most important preference: if the student doesn't want this type, score drops hard
+  const typeMatch = profile.opportunityTypes.includes(opp.opportunityType);
+  if (typeMatch) {
+    score += 12;
+    reasons.push(`✓ ${opp.opportunityType.charAt(0).toUpperCase() + opp.opportunityType.slice(1)} is in your preferred opportunity types (+12).`);
+  } else if (profile.opportunityTypes.length === 0) {
+    score += 6;
+    reasons.push(`No opportunity type preference set — partial credit (+6).`);
+  } else {
+    // Type mismatch — only 2pts, this opportunity is not what the student wants
+    score += 2;
+    reasons.push(`✗ ${opp.opportunityType} is NOT in your preferred types (${profile.opportunityTypes.join(", ")}) — low priority (+2).`);
+    missingRequirements.push(`Type mismatch: you want ${profile.opportunityTypes.join("/")} but this is a ${opp.opportunityType}`);
+  }
+
+  // ── CGPA match — 10pts ────────────────────────────────────────────────────
   const { minCGPA } = opp.eligibility;
   if (minCGPA === null) {
     score += 10;
-    reasons.push("No minimum CGPA requirement — full points awarded.");
+    reasons.push(`✓ No minimum CGPA requirement (+10).`);
   } else if (profile.cgpa >= minCGPA) {
     score += 10;
-    reasons.push(`CGPA ${profile.cgpa.toFixed(2)} meets the minimum requirement of ${minCGPA.toFixed(2)}.`);
+    reasons.push(`✓ Your CGPA ${profile.cgpa.toFixed(2)} meets the minimum of ${minCGPA.toFixed(2)} (+10).`);
   } else if (profile.cgpa >= minCGPA - 0.3) {
     score += 5;
-    reasons.push(`CGPA ${profile.cgpa.toFixed(2)} is slightly below the minimum of ${minCGPA.toFixed(2)} — partial credit.`);
-    missingRequirements.push(`CGPA below minimum (${minCGPA.toFixed(2)} required, you have ${profile.cgpa.toFixed(2)})`);
+    reasons.push(`⚠ Your CGPA ${profile.cgpa.toFixed(2)} is slightly below the minimum ${minCGPA.toFixed(2)} (+5).`);
+    missingRequirements.push(`CGPA slightly below minimum (need ${minCGPA.toFixed(2)}, have ${profile.cgpa.toFixed(2)})`);
   } else {
-    reasons.push(`CGPA ${profile.cgpa.toFixed(2)} does not meet the minimum of ${minCGPA.toFixed(2)}.`);
-    missingRequirements.push(`CGPA below minimum (${minCGPA.toFixed(2)} required)`);
+    score += 0;
+    reasons.push(`✗ Your CGPA ${profile.cgpa.toFixed(2)} does not meet the minimum ${minCGPA.toFixed(2)} (+0).`);
+    missingRequirements.push(`CGPA below minimum (need ${minCGPA.toFixed(2)}, have ${profile.cgpa.toFixed(2)})`);
   }
 
-  // Degree match — 10pts
+  // ── Degree match — 8pts ───────────────────────────────────────────────────
   const { degreeRequired } = opp.eligibility;
   if (degreeRequired.length === 0) {
-    score += 10;
-    reasons.push("No degree restriction — open to all degree levels.");
-  } else if (degreeRequired.map(tok).includes(tok(profile.degree))) {
-    score += 10;
-    reasons.push(`${profile.degree} degree matches the required degree level.`);
+    score += 8;
+    reasons.push(`✓ Open to all degree levels (+8).`);
+  } else if (degreeRequired.map(tok).some((d) => d.includes(tok(profile.degree)) || tok(profile.degree).includes(d))) {
+    score += 8;
+    reasons.push(`✓ Your ${profile.degree} degree matches the requirement (+8).`);
   } else {
-    reasons.push(`Your degree (${profile.degree}) is not in the required list: ${degreeRequired.join(", ")}.`);
+    score += 0;
+    reasons.push(`✗ Your degree (${profile.degree}) does not match required: ${degreeRequired.join(", ")} (+0).`);
     missingRequirements.push(`Degree mismatch (requires ${degreeRequired.join(" or ")})`);
   }
 
-  // Skills overlap — 10pts
+  // ── Skills overlap — 10pts ────────────────────────────────────────────────
   const required = opp.eligibility.skillsRequired.map(tok);
   const profileSkills = profile.skills.map(tok);
 
   if (required.length === 0) {
-    score += 10;
-    reasons.push("No specific skills required — full points awarded.");
+    score += 6;
+    reasons.push(`✓ No specific skills required (+6).`);
   } else {
     const matched = required.filter((req) =>
       profileSkills.some((s) => s.includes(req) || req.includes(s)),
@@ -98,32 +116,11 @@ function scoreProfileFit(
     score += skillScore;
 
     if (matched.length > 0) {
-      reasons.push(
-        `${matched.map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(" and ")} skill${matched.length > 1 ? "s" : ""} match ${matched.length} of ${required.length} required skills.`,
-      );
+      reasons.push(`✓ Skills matched: ${matched.map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(", ")} (${matched.length}/${required.length}) (+${skillScore}).`);
     }
     if (missing.length > 0) {
-      reasons.push(`Missing required skill${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}.`);
+      reasons.push(`✗ Missing skills: ${missing.join(", ")}.`);
     }
-  }
-
-  // Program / interest match — up to 10pts (5 + 5)
-  const typeMatch = profile.opportunityTypes.includes(opp.opportunityType);
-  if (typeMatch) {
-    score += 5;
-    reasons.push(`${opp.opportunityType.charAt(0).toUpperCase() + opp.opportunityType.slice(1)} matches your preferred opportunity types.`);
-  } else {
-    reasons.push(`Opportunity type (${opp.opportunityType}) is not in your preferred types.`);
-  }
-
-  const titleOrg = tok(`${opp.title} ${opp.organization}`);
-  const interestMatches = profile.interests.filter((interest) =>
-    titleOrg.includes(tok(interest)),
-  );
-  const interestScore = clamp(Math.round((interestMatches.length / Math.max(profile.interests.length, 1)) * 5), 0, 5);
-  score += interestScore;
-  if (interestMatches.length > 0) {
-    reasons.push(`Matches your interest${interestMatches.length > 1 ? "s" : ""}: ${interestMatches.join(", ")}.`);
   }
 
   return { score: clamp(score, 0, 40), reasons, matchedSkills, missingRequirements };
@@ -180,33 +177,45 @@ function scorePreferenceMatch(
   let score = 0;
   const reasons: string[] = [];
 
-  // Opportunity type — 5pts
-  if (profile.opportunityTypes.includes(opp.opportunityType)) {
-    score += 5;
-    reasons.push(`${opp.opportunityType.charAt(0).toUpperCase() + opp.opportunityType.slice(1)} is in your preferred opportunity types.`);
+  // ── Opportunity type already scored in profileFit (12pts there)
+  // Here we give bonus for interest keyword match — 4pts
+  const titleOrg = tok(`${opp.title} ${opp.organization} ${opp.summary}`);
+  const interestMatches = profile.interests.filter((interest) =>
+    titleOrg.includes(tok(interest)),
+  );
+  if (interestMatches.length > 0) {
+    const interestScore = clamp(interestMatches.length * 2, 0, 4);
+    score += interestScore;
+    reasons.push(`✓ Matches your interest${interestMatches.length > 1 ? "s" : ""}: ${interestMatches.join(", ")} (+${interestScore}).`);
   }
 
-  // Location preference — 3pts
+  // ── Location preference — 4pts ────────────────────────────────────────────
   const loc = tok(opp.location);
   const pref = profile.locationPreference;
   const locationMatch =
     pref === "any" ||
-    (pref === "local"          && (loc.includes("pakistan") || loc.includes("lahore") || loc.includes("karachi") || loc.includes("islamabad"))) ||
-    (pref === "national"       && (loc.includes("pakistan") || loc.includes("lahore") || loc.includes("karachi") || loc.includes("islamabad"))) ||
-    (pref === "international"  && (loc.includes("international") || loc.includes("global") || loc.includes("abroad") || loc.includes("usa") || loc.includes("uk"))) ||
-    (pref === "remote"         && loc.includes("remote"));
+    (pref === "local"         && (loc.includes("pakistan") || loc.includes("lahore") || loc.includes("karachi") || loc.includes("islamabad"))) ||
+    (pref === "national"      && (loc.includes("pakistan") || loc.includes("lahore") || loc.includes("karachi") || loc.includes("islamabad"))) ||
+    (pref === "international" && (loc.includes("international") || loc.includes("global") || loc.includes("abroad") || loc.includes("usa") || loc.includes("uk") || loc.includes("germany") || loc.includes("europe"))) ||
+    (pref === "remote"        && loc.includes("remote"));
 
   if (locationMatch) {
-    score += 3;
-    reasons.push(`Location (${opp.location}) matches your preference (${pref}).`);
+    score += 4;
+    reasons.push(`✓ Location (${opp.location}) matches your preference (${pref}) (+4).`);
+  } else if (loc.includes("remote") || loc.includes("hybrid")) {
+    score += 2;
+    reasons.push(`~ Location is ${opp.location} — flexible (+2).`);
   } else {
-    reasons.push(`Location (${opp.location}) does not match your preference (${pref}).`);
+    reasons.push(`✗ Location (${opp.location}) does not match your preference (${pref}) (+0).`);
   }
 
-  // Financial need — 2pts
+  // ── Financial need — 2pts ─────────────────────────────────────────────────
   if (opp.isFullyFunded && (profile.financialNeed === "medium" || profile.financialNeed === "high")) {
     score += 2;
-    reasons.push("Fully funded opportunity aligns with your financial need.");
+    reasons.push(`✓ Fully funded — aligns with your financial need (${profile.financialNeed}) (+2).`);
+  } else if (profile.financialNeed === "none" || profile.financialNeed === "low") {
+    score += 1;
+    reasons.push(`~ Financial need is low — funding not a priority (+1).`);
   }
 
   return { score: clamp(score, 0, 10), reasons };

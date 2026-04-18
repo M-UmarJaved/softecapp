@@ -513,6 +513,7 @@ export function ResultsView({ data, sessionId }: Props) {
   const { applied, markApplied, unmarkApplied } = useApplied();
   const [activeId, setActiveId] = useState<string | null>(opportunities[0]?.id ?? null);
   const mainRef = useRef<HTMLDivElement>(null);
+  const [whatsappToast, setWhatsappToast] = useState(false);
 
   // ── Live countdown to top opportunity deadline ──
   const [countdown, setCountdown] = useState("");
@@ -549,7 +550,10 @@ export function ResultsView({ data, sessionId }: Props) {
 
   const copyWhatsApp = () => {
     const text = buildWhatsAppSummary(opportunities, sessionId);
-    navigator.clipboard.writeText(text).catch(() => {});
+    navigator.clipboard.writeText(text).then(() => {
+      setWhatsappToast(true);
+      setTimeout(() => setWhatsappToast(false), 3000);
+    }).catch(() => {});
   };
 
   return (
@@ -609,10 +613,13 @@ export function ResultsView({ data, sessionId }: Props) {
                   variant="outline"
                   size="sm"
                   onClick={copyWhatsApp}
-                  className="gap-1.5"
+                  className={cn("gap-1.5 transition-all", whatsappToast && "border-green-500/40 bg-green-500/10 text-green-400")}
                 >
-                  <MessageCircleIcon className="size-3.5" />
-                  WhatsApp
+                  {whatsappToast ? (
+                    <><CheckCircle2Icon className="size-3.5" /> Copied!</>
+                  ) : (
+                    <><MessageCircleIcon className="size-3.5" /> WhatsApp</>
+                  )}
                 </Button>
               </div>
             </div>

@@ -36,35 +36,59 @@ type AnalyzeResponse = {
   provider: "grok" | "heuristic-fallback";
 };
 
-// ─── Extraction system prompt (exact spec) ────────────────────────────────────
+// ─── Build profile-aware extraction prompt ───────────────────────────────────
 
-const EXTRACTION_SYSTEM_PROMPT =
-  "You are an expert at extracting structured information from opportunity announcement emails. " +
-  "Extract ALL available information. If a field is not present, set it to null. " +
-  "Never hallucinate information. Return ONLY valid JSON matching this exact schema:\n" +
-  JSON.stringify({
-    emailId: "string",
-    opportunityType: "scholarship|internship|competition|fellowship|admission|conference|job|grant|workshop|other",
-    title: "string",
-    organization: "string",
-    deadline: "string|null (ISO 8601 date, or null)",
-    eligibility: {
-      minCGPA: "number|null",
-      degreeRequired: "string[]",
-      semesterRange: { min: "number|null", max: "number|null" },
-      skillsRequired: "string[]",
-      nationalityRequired: "string|null",
-      otherConditions: "string[]",
-    },
-    requiredDocuments: "string[]",
-    benefits: "string",
-    applicationLink: "string|null",
-    contactEmail: "string|null",
-    location: "string",
-    isFullyFunded: "boolean",
-    summary: "string (2 sentences max, plain English)",
-    extractionWarnings: "string[]",
-  });
+function buildExtractionPrompt(profile: StudentProfileSpec): string {
+  return [
+    "You are an expert at extracting structured information from opportunity announcement emails.",
+    "You are analyzing emails FOR A SPECIFIC STUDENT — use their profile to guide extraction.",
+    "",
+    `STUDENT PROFILE:`,
+    `- Name: ${profile.name}`,
+    `- Degree: ${profile.degree} in ${profile.program}`,
+    `- Semester: ${profile.semester}`,
+    `- CGPA: ${profile.cgpa.toFixed(2)}`,
+    `- Skills: ${profile.skills.join(", ") || "none listed"}`,
+    `- Interests: ${profile.interests.join(", ") || "none listed"}`,
+    `- Preferred opportunity types: ${profile.opportunityTypes.join(", ")}`,
+    `- Location preference: ${profile.locationPreference}`,
+    `- Financial need: ${profile.financialNeed}`,
+    "",
+    "INSTRUCTIONS:",
+    "1. Extract ALL available information from the email. If a field is not present, set it to null.",
+    "2. Never hallucinate information not present in the email.",
+    "3. For opportunityType, classify based on email content: scholarship|internship|competition|fellowship|admission|conference|job|grant|workshop|other",
+    "4. For eligibility.skillsRequired, extract skills mentioned in the email and also note which of the student's skills match.",
+    "5. For eligibility.degreeRequired, extract degree requirements and check if student's degree qualifies.",
+    "6. In extractionWarnings, flag any eligibility mismatches (e.g., 'Student CGPA 3.2 meets minimum 3.0', 'Student degree BS matches requirement', 'Student lacks required skill: research').",
+    "7. Set isFullyFunded=true if the email mentions full funding, stipend, or scholarship covering all costs.",
+    "",
+    "Return ONLY valid JSON matching this exact schema (no markdown, no explanation):",
+    JSON.stringify({
+      emailId: "string",
+      opportunityType: "scholarship|internship|competition|fellowship|admission|conference|job|grant|workshop|other",
+      title: "string",
+      organization: "string",
+      deadline: "string|null (ISO 8601 date, or null)",
+      eligibility: {
+        minCGPA: "number|null",
+        degreeRequired: "string[]",
+        semesterRange: { min: "number|null", max: "number|null" },
+        skillsRequired: "string[]",
+        nationalityRequired: "string|null",
+        otherConditions: "string[]",
+      },
+      requiredDocuments: "string[]",
+      benefits: "string (describe stipend amount, funding, perks)",
+      applicationLink: "string|null",
+      contactEmail: "string|null",
+      location: "string (city/country or Remote/Hybrid/Pakistan/International)",
+      isFullyFunded: "boolean",
+      summary: "string (2 sentences: what the opportunity is + why it may/may not fit this student)",
+      extractionWarnings: "string[] (eligibility matches and mismatches for this specific student)",
+    }),
+  ].join("\n");
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -224,20 +248,35 @@ function heuristicExtract(email: RawEmail): ExtractedOpportunitySpec {
 
 // ─── Spam / classification ────────────────────────────────────────────────────
 
+// Only very obvious spam patterns — require 2+ hits to flag
 const SPAM_SIGNALS = [
   "won a prize", "free macbook", "free iphone", "claim your prize",
-  "click here to claim", "limited offer", "you have been selected to receive a free",
-  "suspicious", "congratulations! you have won",
-  "50% off", "weekend sale", "promo code", "discount code",
-  "shop now", "use code", "offer valid till",
+  "click here to claim", "you have been selected to receive a free",
+  "congratulations! you have won", "claim now",
+  "limited offer! act now",
 ];
 
-const OPPORTUNITY_SIGNALS = [
-  "scholarship", "internship", "fellowship", "competition", "hackathon",
-  "challenge", "conference", "workshop", "bootcamp", "admission",
-  "apply", "deadline", "eligibility", "stipend", "grant", "program",
-  "cgpa", "gpa", "semester", "university", "register",
+// Strong opportunity signals — 1 hit is enough to keep
+const STRONG_OPP_SIGNALS = [
+  "scholarship", "internship", "fellowship", "deadline", "apply",
+  "eligibility", "stipend", "cgpa", "gpa", "semester", "university",
+  "hec", "pitb", "google", "ieee", "lums", "nust", "fast", "iba",
+  "registration", "application", "program", "award", "grant",
+  "competition", "hackathon", "conference", "workshop", "admission",
 ];
+
+// Trusted sender domains — always legitimate
+const TRUSTED_DOMAINS = [
+  "hec.gov.pk", "google.com", "ieee.org", "lums.edu.pk", "nust.edu.pk",
+  "fast.edu.pk", "iba.edu.pk", "comsats.edu.pk", "uet.edu.pk",
+  "pitb.gov.pk", "pasha.org.pk", "linkedin.com", "microsoft.com",
+  ".edu", ".gov", ".org", ".ac.pk", ".edu.pk",
+];
+
+function isTrustedSender(sender: string): boolean {
+  const lower = sender.toLowerCase();
+  return TRUSTED_DOMAINS.some((d) => lower.includes(d));
+}
 
 type ClassifiedEmail = {
   email: RawEmail;
@@ -248,102 +287,41 @@ type ClassifiedEmail = {
 
 async function classifyEmails(
   emails: RawEmail[],
-  useFallback: boolean,
+  _useFallback: boolean,
 ): Promise<ClassifiedEmail[]> {
-  // Always run heuristic first as baseline
-  const heuristic = emails.map((email): ClassifiedEmail => {
+  return emails.map((email): ClassifiedEmail => {
     const text = `${email.subject ?? ""} ${email.body}`.toLowerCase();
+    const sender = email.sender ?? "";
+
+    // Trusted sender → always an opportunity
+    if (isTrustedSender(sender)) {
+      return { email, isOpportunity: true, confidence: 0.95, reason: "Trusted sender domain" };
+    }
+
     const spamHits = SPAM_SIGNALS.filter((s) => text.includes(s)).length;
-    const oppHits  = OPPORTUNITY_SIGNALS.filter((s) => text.includes(s)).length;
+    const oppHits  = STRONG_OPP_SIGNALS.filter((s) => text.includes(s)).length;
 
-    if (spamHits >= 2 || (spamHits >= 1 && oppHits === 0)) {
+    // Only flag spam if 2+ spam signals AND fewer than 2 opportunity signals
+    if (spamHits >= 2 && oppHits < 2) {
       return {
-        email,
-        isOpportunity: false,
+        email, isOpportunity: false,
         confidence: Math.min(0.95, 0.6 + spamHits * 0.1),
-        reason: `Spam signals detected: ${SPAM_SIGNALS.filter((s) => text.includes(s)).join(", ")}`,
+        reason: `Spam signals: ${SPAM_SIGNALS.filter((s) => text.includes(s)).join(", ")}`,
       };
     }
 
-    if (oppHits >= 2) {
+    // Has any opportunity signal → keep it
+    if (oppHits >= 1) {
       return {
-        email,
-        isOpportunity: true,
+        email, isOpportunity: true,
         confidence: Math.min(0.95, 0.6 + oppHits * 0.05),
-        reason: `Opportunity signals: ${OPPORTUNITY_SIGNALS.filter((s) => text.includes(s)).slice(0, 4).join(", ")}`,
+        reason: `Opportunity signals: ${STRONG_OPP_SIGNALS.filter((s) => text.includes(s)).slice(0, 4).join(", ")}`,
       };
     }
 
-    // Ambiguous — treat as opportunity with low confidence
-    return {
-      email,
-      isOpportunity: oppHits > 0,
-      confidence: 0.5,
-      reason: oppHits > 0 ? "Weak opportunity signals detected" : "No clear opportunity signals",
-    };
+    // Ambiguous — default to opportunity (better to show than miss)
+    return { email, isOpportunity: true, confidence: 0.5, reason: "No clear spam signals — treated as opportunity" };
   });
-
-  if (!hasGrokKey()) return heuristic;
-
-  // Use Grok for fast classification on ambiguous emails
-  const ambiguous = heuristic.filter((c) => c.confidence < 0.75);
-  if (ambiguous.length === 0) return heuristic;
-
-  try {
-    const client = getGrokClient();
-    const completion = await client.chat.completions.create({
-      model: "grok-3-mini",
-      temperature: 0,
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are an email classifier. For each email, determine if it is a genuine student opportunity " +
-            "(scholarship, internship, competition, fellowship, admission, conference, grant, workshop, job) " +
-            "or spam/promotional. " +
-            "Return ONLY a JSON array: [{\"id\": string, \"isOpportunity\": boolean, \"confidence\": number, \"reason\": string}]. " +
-            "No markdown.",
-        },
-        {
-          role: "user",
-          content: JSON.stringify(
-            ambiguous.map((c) => ({
-              id: c.email.id,
-              subject: c.email.subject,
-              body: c.email.body.slice(0, 300),
-            })),
-          ),
-        },
-      ],
-    });
-
-    const content = completion.choices[0]?.message?.content ?? "";
-    const firstBracket = content.indexOf("[");
-    const lastBracket  = content.lastIndexOf("]");
-    if (firstBracket < 0) throw new Error("No JSON array in response");
-
-    const parsed = JSON.parse(content.slice(firstBracket, lastBracket + 1)) as Array<{
-      id: string;
-      isOpportunity: boolean;
-      confidence: number;
-      reason: string;
-    }>;
-
-    // Merge Grok results back
-    const grokMap = new Map(parsed.map((r) => [r.id, r]));
-    return heuristic.map((c) => {
-      const grok = grokMap.get(c.email.id);
-      if (!grok) return c;
-      return {
-        email: c.email,
-        isOpportunity: grok.isOpportunity,
-        confidence: grok.confidence,
-        reason: grok.reason,
-      };
-    });
-  } catch {
-    return heuristic;
-  }
 }
 
 async function extractOne(
@@ -355,12 +333,13 @@ async function extractOne(
 
   try {
     const client = getGrokClient();
+    const systemPrompt = buildExtractionPrompt(profile);
 
     const completion = await client.chat.completions.create({
       model: GROK_EXTRACTION_MODEL,
       temperature: 0.1,
       messages: [
-        { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
+        { role: "system", content: systemPrompt },
         {
           role: "user",
           content: JSON.stringify({
@@ -368,13 +347,6 @@ async function extractOne(
             subject: email.subject,
             sender:  email.sender,
             body:    email.body,
-            studentProfile: {
-              degree:           profile.degree,
-              program:          profile.program,
-              cgpa:             profile.cgpa,
-              skills:           profile.skills,
-              opportunityTypes: profile.opportunityTypes,
-            },
           }),
         },
       ],
@@ -437,6 +409,7 @@ function validatePayload(payload: unknown): { emails: RawEmail[]; profile: Stude
   const p = payload as Record<string, unknown>;
 
   if (!Array.isArray(p.emails) || p.emails.length < 1) return { error: "emails must be a non-empty array." };
+  if (p.emails.length < 5) return { error: "Please provide at least 5 emails for a meaningful analysis. Add more emails and try again." };
   if (p.emails.length > 15) return { error: "Maximum 15 emails per request." };
   if (typeof p.profile !== "object" || p.profile === null) return { error: "profile is required." };
 

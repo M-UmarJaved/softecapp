@@ -29,8 +29,8 @@ declare global {
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 20;
-const DEFAULT_GROK_MODEL = "grok-3-mini";     // fast model for chat streaming
-const DEFAULT_GROK_BASE_URL = "https://api.x.ai/v1";
+const DEFAULT_GROK_MODEL = "llama-3.1-8b-instant"; // Fast model for chat — <500ms first token
+const DEFAULT_GROK_BASE_URL = "https://api.groq.com/openai/v1";
 
 const rateLimitStore =
   globalThis.__aiRouteRateLimitStore ?? new Map<string, RateLimitState>();
@@ -143,6 +143,15 @@ function resolveApiKey() {
     process.env.OPENAI_API_KEY ||
     ""
   );
+}
+
+function resolveBackupClient(): import("openai").default | null {
+  const backupKey = process.env.BACKUP_AI_API_KEY;
+  if (!backupKey) return null;
+  return new OpenAI({
+    apiKey: backupKey,
+    baseURL: process.env.BACKUP_AI_BASE_URL || "https://api.groq.com/openai/v1",
+  });
 }
 
 function normalizeMessages(messages: IncomingMessage[] | undefined) {
@@ -264,6 +273,7 @@ export async function POST(request: Request) {
 
   const model =
     (typeof body.model === "string" && body.model.trim()) ||
+    process.env.GROK_CHAT_MODEL ||
     process.env.GROK_MODEL ||
     DEFAULT_GROK_MODEL;
 
@@ -274,31 +284,38 @@ export async function POST(request: Request) {
 
   try {
     const startedAt = Date.now();
-    let promptTokens = 0;
-    let completionTokens = 0;
-    let totalTokens = 0;
     let streamedWordCount = 0;
 
-    const completion = await client.chat.completions.create(
-      {
-        model,
-        stream: true,
-        stream_options: {
-          include_usage: true,
+    // Try primary client, fall back to backup on any error
+    let activeClient = client;
+    let activeModel = model;
+
+    const tryStream = async (c: OpenAI, m: string) => {
+      return c.chat.completions.create(
+        {
+          model: m,
+          stream: true,
+          temperature: 0.25,
+          messages: [
+            { role: "system", content: getSystemPrompt(theme) },
+            ...messages,
+          ],
         },
-        temperature: 0.25,
-        messages: [
-          {
-            role: "system",
-            content: getSystemPrompt(theme),
-          },
-          ...messages,
-        ],
-      },
-      {
-        signal: abortController.signal,
-      },
-    );
+        { signal: abortController.signal },
+      );
+    };
+
+    let completion: Awaited<ReturnType<typeof tryStream>>;
+    try {
+      completion = await tryStream(activeClient, activeModel);
+    } catch (primaryErr) {
+      // Primary failed — try backup
+      const backupClient = resolveBackupClient();
+      if (!backupClient) throw primaryErr;
+      activeClient = backupClient;
+      activeModel = process.env.BACKUP_AI_MODEL || "llama-3.1-8b-instant";
+      completion = await tryStream(activeClient, activeModel);
+    }
 
     const encoder = new TextEncoder();
 
@@ -310,32 +327,15 @@ export async function POST(request: Request) {
               break;
             }
 
-            if (chunk.usage) {
-              promptTokens = chunk.usage.prompt_tokens ?? promptTokens;
-              completionTokens =
-                chunk.usage.completion_tokens ?? completionTokens;
-              totalTokens = chunk.usage.total_tokens ?? totalTokens;
-            }
-
             const delta = chunk.choices?.[0]?.delta?.content;
+            if (!delta) continue;
 
-            if (!delta) {
-              continue;
-            }
-
-            streamedWordCount += delta
-              .split(/\s+/)
-              .filter(Boolean).length;
-
+            streamedWordCount += delta.split(/\s+/).filter(Boolean).length;
             controller.enqueue(encoder.encode(delta));
           }
 
-          console.info("[AI Route Usage]", {
-            provider: "grok",
+          console.info("[AI Route]", {
             model,
-            promptTokens,
-            completionTokens,
-            totalTokens,
             streamedWordCount,
             durationMs: Date.now() - startedAt,
             theme,

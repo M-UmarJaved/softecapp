@@ -10,11 +10,16 @@ import {
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
+import Link from "next/link";
 import {
+  ArrowLeftIcon,
   ArrowRightIcon,
+  CheckCircle2Icon,
+  InboxIcon,
   Loader2Icon,
   MailIcon,
   PlusIcon,
+  SaveIcon,
   SparklesIcon,
   UploadIcon,
   XIcon,
@@ -22,6 +27,7 @@ import {
 
 import { InboxSimulator } from "@/components/InboxSimulator";
 import { ProcessingOverlay } from "@/components/ProcessingOverlay";
+import { GmailImport } from "@/components/GmailImport";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -210,7 +216,10 @@ function ExperienceInput({
 function FormSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="space-y-4">
-      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{title}</p>
+      <div className="flex items-center gap-3">
+        <p className="text-xs font-bold uppercase tracking-[0.18em] text-blue-400">{title}</p>
+        <div className="h-px flex-1 bg-white/8" />
+      </div>
       {children}
     </div>
   );
@@ -218,7 +227,7 @@ function FormSection({ title, children }: { title: string; children: React.React
 
 function FieldError({ msg }: { msg?: string }) {
   if (!msg) return null;
-  return <p className="mt-1 text-xs text-destructive">{msg}</p>;
+  return <p className="mt-1 text-xs text-red-400">{msg}</p>;
 }
 
 // ─── Main page ────────────────────────────────────────────────────────────────
@@ -248,7 +257,16 @@ function AnalyzePageContent() {
     topScore?: number;
   }>({});
 
-  // Auto-load sample on ?demo=true
+  // Gmail state — check if connected via cookie (server sets it, we detect via query param)
+  const [gmailConnected, setGmailConnected] = useState(false);
+
+  // Profile save state
+  const [profileSaving,  setProfileSaving]  = useState(false);
+  const [profileSaved,   setProfileSaved]   = useState(false);
+  const [profileLoaded,  setProfileLoaded]  = useState(false);
+
+  // Auto-load sample on ?demo=true, detect gmail_connected=1 from callback
+  // Also load saved profile on mount
   useEffect(() => {
     if (searchParams.get("demo") === "true") {
       const text = getSampleEmailText();
@@ -256,6 +274,23 @@ function AnalyzePageContent() {
       setEmails(SAMPLE_EMAILS);
       setEmailTab("sample");
     }
+    if (searchParams.get("gmail_connected") === "1") {
+      setGmailConnected(true);
+    }
+    if (searchParams.get("gmail_error")) {
+      setApiError(`Gmail connection failed: ${searchParams.get("gmail_error")}`);
+    }
+
+    // Load saved profile from server (only if logged in)
+    fetch("/api/profile")
+      .then((r) => r.json())
+      .then((data: { profile?: StudentProfileSpec | null }) => {
+        if (data.profile) {
+          setProfile(data.profile);
+          setProfileLoaded(true);
+        }
+      })
+      .catch(() => { /* not logged in or no profile yet — use defaults */ });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -273,6 +308,18 @@ function AnalyzePageContent() {
     setEmailText(text);
     setEmails(SAMPLE_EMAILS);
     setEmailTab("sample");
+    setErrors((e) => { const n = { ...e }; delete n.emails; return n; });
+  };
+
+  const handleGmailImport = (importedEmails: RawEmail[]) => {
+    // Replace all current emails with Gmail emails (don't merge with samples)
+    setEmails(importedEmails.slice(0, 15));
+    setEmailTab("paste"); // switch away from sample tab
+    const text = importedEmails
+      .slice(0, 15)
+      .map((e) => `Subject: ${e.subject}\nFrom: ${e.sender ?? ""}\n${e.body}`)
+      .join("\n---\n");
+    setEmailText(text);
     setErrors((e) => { const n = { ...e }; delete n.emails; return n; });
   };
 
@@ -300,11 +347,28 @@ function AnalyzePageContent() {
     set("opportunityTypes", next.length > 0 ? next : [type]);
   };
 
+  const handleSaveProfile = async () => {
+    setProfileSaving(true);
+    try {
+      const res = await fetch("/api/profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(profile),
+      });
+      if (res.ok) {
+        setProfileSaved(true);
+        setTimeout(() => setProfileSaved(false), 2500);
+      }
+    } catch { /* silent */ } finally {
+      setProfileSaving(false);
+    }
+  };
+
   // ── Validation ──────────────────────────────────────────────────────────────
 
   const validate = (): FormErrors => {
     const errs: FormErrors = {};
-    if (emails.length < 1)  errs.emails    = "Parse at least 1 email before analyzing.";
+    if (emails.length < 5)  errs.emails    = `Please provide at least 5 emails for a meaningful analysis. You have ${emails.length} — add ${5 - emails.length} more.`;
     if (emails.length > 15) errs.emails    = "Maximum 15 emails allowed.";
     if (!profile.name.trim()) errs.name    = "Name is required.";
     if (!profile.program.trim()) errs.program = "Program is required.";
@@ -369,7 +433,13 @@ function AnalyzePageContent() {
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-[#0A0F1E] text-white">
+      {/* Background */}
+      <div className="pointer-events-none fixed inset-0 overflow-hidden">
+        <div className="absolute left-1/4 top-0 h-96 w-96 rounded-full bg-blue-600/8 blur-[120px]" />
+        <div className="absolute right-1/4 top-1/3 h-64 w-64 rounded-full bg-indigo-600/6 blur-[100px]" />
+        <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.015)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.015)_1px,transparent_1px)] bg-[size:80px_80px]" />
+      </div>
       {/* Processing overlay — shown while analyzing */}
       {isAnalyzing && (
         <ProcessingOverlay
@@ -379,34 +449,71 @@ function AnalyzePageContent() {
         />
       )}
       {/* Top bar */}
-      <div className="border-b border-border/70 bg-background/80 backdrop-blur-md">
-        <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-          <h1 className="font-heading text-lg font-semibold text-foreground">
-            Opportunity Inbox Copilot
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {emails.length > 0 ? `${emails.length} email${emails.length !== 1 ? "s" : ""} loaded` : "No emails loaded"}
-          </p>
+      <div className="sticky top-0 z-40 border-b border-white/8 bg-[#0A0F1E]/90 backdrop-blur-xl">
+        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center gap-4">
+            <Link href="/"
+              className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-slate-400 transition-all hover:border-white/20 hover:bg-white/8 hover:text-white">
+              <ArrowLeftIcon className="size-4" />
+              Home
+            </Link>
+            <div className="h-5 w-px bg-white/10" />
+            <div className="flex items-center gap-2">
+              <span className="flex size-7 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 text-white">
+                <InboxIcon className="size-3.5" />
+              </span>
+              <h1 className="font-bold text-white">Analyze Inbox</h1>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {emails.length > 0 && (
+              <span className="rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-1 text-xs font-semibold text-blue-400">
+                {emails.length} email{emails.length !== 1 ? "s" : ""} loaded
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
       <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        {/* Page header */}
+        <div className="mb-8 animate-fade-in-up">
+          <h2 className="text-2xl font-extrabold text-white">
+            Analyze your opportunity emails
+          </h2>
+          <p className="mt-1.5 text-slate-400">
+            Paste 5–15 emails, fill your profile, and get a ranked priority list in under 30 seconds.
+          </p>
+        </div>
+
         <div className="grid gap-6 lg:grid-cols-[1fr_420px]">
 
           {/* ── LEFT: Email Input ─────────────────────────────────────────── */}
-          <div className="space-y-4">
+          <div className="space-y-4 animate-fade-in-up [animation-delay:100ms]">
+
+            {/* Gmail import */}
+            <GmailImport
+              isConnected={gmailConnected}
+              onConnectedChange={setGmailConnected}
+              onEmailsImported={handleGmailImport}
+            />
+
             {/* Tab switcher */}
-            <div className="flex gap-1 rounded-xl border border-border/70 bg-muted/40 p-1">
+            <div className="flex gap-1 rounded-xl border border-white/10 bg-white/4 p-1">
               {(["paste", "sample"] as EmailTab[]).map((tab) => (
                 <button
                   key={tab}
                   type="button"
-                  onClick={() => { setEmailTab(tab); if (tab === "sample") handleLoadSample(); }}
+                  onClick={() => {
+                    setEmailTab(tab);
+                    // Only auto-load samples if no real emails are loaded yet
+                    if (tab === "sample" && emails.length === 0) handleLoadSample();
+                  }}
                   className={cn(
-                    "flex-1 rounded-lg px-4 py-2 text-sm font-medium transition-colors",
+                    "flex-1 rounded-lg px-4 py-2 text-sm font-medium transition-all",
                     emailTab === tab
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground",
+                      ? "bg-white/10 text-white shadow-sm"
+                      : "text-slate-400 hover:text-white",
                   )}
                 >
                   {tab === "paste" ? (
@@ -415,7 +522,7 @@ function AnalyzePageContent() {
                     </span>
                   ) : (
                     <span className="flex items-center justify-center gap-2">
-                      <SparklesIcon className="size-4" /> Load Sample Emails
+                      <SparklesIcon className="size-4 text-blue-400" /> Load Sample Emails
                     </span>
                   )}
                 </button>
@@ -425,10 +532,10 @@ function AnalyzePageContent() {
             {/* Textarea */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <Label htmlFor="email-textarea">
-                  {emailTab === "paste" ? "Paste emails below — separate each with ---" : "Sample emails loaded"}
-                </Label>
-                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+                <label htmlFor="email-textarea" className="text-sm font-medium text-slate-300">
+                  {emailTab === "paste" ? "Paste emails — separate each with ---" : "Sample emails loaded"}
+                </label>
+                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-500 hover:text-slate-300 transition-colors">
                   <UploadIcon className="size-3.5" />
                   Upload .txt
                   <input
@@ -442,45 +549,52 @@ function AnalyzePageContent() {
                 </label>
               </div>
 
-              <Textarea
+              <textarea
                 id="email-textarea"
                 value={emailText}
                 onChange={(e) => setEmailText(e.target.value)}
-                className="min-h-72 font-mono text-xs"
+                className="min-h-72 w-full rounded-xl border border-white/10 bg-white/4 px-4 py-3 font-mono text-xs text-slate-300 outline-none placeholder:text-slate-600 focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/20 transition-all"
                 placeholder={`Subject: Scholarship Opportunity 2026\nFrom: admissions@university.edu\nApplications are open for a fully funded scholarship...\n---\nSubject: Summer Internship Program\nFrom: careers@company.com\n...`}
               />
 
-              <FieldError msg={errors.emails} />
+              {errors.emails && (
+                <p className="text-xs text-red-400">{errors.emails}</p>
+              )}
 
               <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="outline" size="sm" onClick={handleParse} className="gap-1.5">
+                <button type="button" onClick={handleParse}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300 transition-all hover:border-white/20 hover:bg-white/8 hover:text-white">
                   <MailIcon className="size-3.5" /> Parse Emails
-                </Button>
-                <Button type="button" variant="secondary" size="sm" onClick={handleLoadSample} className="gap-1.5">
+                </button>
+                <button type="button" onClick={handleLoadSample}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-blue-500/30 bg-blue-500/10 px-3 py-1.5 text-xs font-medium text-blue-400 transition-all hover:bg-blue-500/20">
                   <SparklesIcon className="size-3.5" /> Load 8 Sample Emails
-                </Button>
+                </button>
                 {emailText && (
-                  <Button type="button" variant="ghost" size="sm" onClick={() => { setEmailText(""); setEmails([]); }} className="gap-1.5 text-muted-foreground">
+                  <button type="button" onClick={() => { setEmailText(""); setEmails([]); }}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/8 px-3 py-1.5 text-xs font-medium text-slate-500 transition-all hover:text-slate-300">
                     <XIcon className="size-3.5" /> Clear
-                  </Button>
+                  </button>
                 )}
               </div>
             </div>
 
             {/* Inbox preview */}
             {emails.length > 0 && (
-              <div className="space-y-2">
+              <div className="space-y-2 animate-fade-in-up">
                 <div className="flex items-center justify-between">
-                  <p className="text-sm font-medium text-foreground">
+                  <p className="text-sm font-semibold text-white">
                     {emails.length} email{emails.length !== 1 ? "s" : ""} detected
                   </p>
                   <span className={cn(
-                    "rounded-full px-2.5 py-0.5 text-xs font-medium",
+                    "rounded-full px-2.5 py-0.5 text-xs font-semibold",
                     emails.length >= 5 && emails.length <= 15
-                      ? "bg-primary/15 text-primary"
-                      : "bg-destructive/15 text-destructive",
+                      ? "border border-green-500/30 bg-green-500/10 text-green-400"
+                      : emails.length > 0 && emails.length < 5
+                      ? "border border-yellow-500/30 bg-yellow-500/10 text-yellow-400"
+                      : "border border-red-500/30 bg-red-500/10 text-red-400",
                   )}>
-                    {emails.length < 5 ? "Need at least 5" : emails.length > 15 ? "Max 15 allowed" : "Ready"}
+                    {emails.length === 0 ? "No emails" : emails.length < 5 ? `Need ${5 - emails.length} more (min 5)` : emails.length > 15 ? "Max 15 allowed" : "✓ Ready"}
                   </span>
                 </div>
                 <InboxSimulator emails={emails.map((e) => ({
@@ -495,41 +609,49 @@ function AnalyzePageContent() {
           </div>
 
           {/* ── RIGHT: Profile Form ───────────────────────────────────────── */}
-          <div className="space-y-6 rounded-2xl border border-border/70 bg-card/60 p-5 backdrop-blur-sm">
+          <div className="space-y-7 rounded-2xl border border-white/10 bg-white/3 p-7 backdrop-blur-sm animate-fade-in-up [animation-delay:200ms]">
 
             {/* Section 1 — Academic Info */}
             <FormSection title="Academic Info">
-              <div className="space-y-3">
-                <div>
-                  <Label htmlFor="name">Full Name *</Label>
+              <div className="space-y-5">
+
+                <div className="space-y-2">
+                  <label htmlFor="name" className="block text-sm font-semibold text-slate-200">
+                    Full Name <span className="text-red-400">*</span>
+                  </label>
                   <Input
                     id="name"
                     value={profile.name}
                     onChange={(e) => set("name", e.target.value)}
                     placeholder="Ayesha Khan"
-                    className={cn(errors.name && "border-destructive")}
+                    className={cn("h-11 text-sm", errors.name && "border-destructive")}
                   />
                   <FieldError msg={errors.name} />
                 </div>
 
-                <div>
-                  <Label htmlFor="university">University</Label>
+                <div className="space-y-2">
+                  <label htmlFor="university" className="block text-sm font-semibold text-slate-200">
+                    University
+                  </label>
                   <Input
                     id="university"
                     value={profile.university}
                     onChange={(e) => set("university", e.target.value)}
                     placeholder="FAST-NUCES Lahore"
+                    className="h-11 text-sm"
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <Label htmlFor="degree">Degree</Label>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label htmlFor="degree" className="block text-sm font-semibold text-slate-200">
+                      Degree
+                    </label>
                     <select
                       id="degree"
                       value={profile.degree}
                       onChange={(e) => set("degree", e.target.value as StudentProfileSpec["degree"])}
-                      className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
+                      className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground"
                     >
                       {DEGREE_OPTIONS.map((d) => (
                         <option key={d} value={d}>{d}</option>
@@ -537,25 +659,29 @@ function AnalyzePageContent() {
                     </select>
                   </div>
 
-                  <div>
-                    <Label htmlFor="program">Program *</Label>
+                  <div className="space-y-2">
+                    <label htmlFor="program" className="block text-sm font-semibold text-slate-200">
+                      Program <span className="text-red-400">*</span>
+                    </label>
                     <Input
                       id="program"
                       value={profile.program}
                       onChange={(e) => set("program", e.target.value)}
                       placeholder="Computer Science"
-                      className={cn(errors.program && "border-destructive")}
+                      className={cn("h-11 text-sm", errors.program && "border-destructive")}
                     />
                     <FieldError msg={errors.program} />
                   </div>
                 </div>
 
                 {/* Semester slider */}
-                <div>
+                <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <Label htmlFor="semester">Semester</Label>
-                    <span className="text-sm font-medium text-foreground">
-                      Semester {profile.semester} of {profile.degree === "BS" || profile.degree === "BBA" ? 8 : 4}
+                    <label htmlFor="semester" className="text-sm font-semibold text-slate-200">
+                      Semester
+                    </label>
+                    <span className="rounded-lg bg-blue-500/15 px-2.5 py-1 text-sm font-bold text-blue-400">
+                      {profile.semester} / {profile.degree === "BS" || profile.degree === "BBA" ? 8 : 4}
                     </span>
                   </div>
                   <input
@@ -565,19 +691,21 @@ function AnalyzePageContent() {
                     max={profile.degree === "BS" || profile.degree === "BBA" ? 8 : 4}
                     value={profile.semester}
                     onChange={(e) => set("semester", Number(e.target.value))}
-                    className="mt-2 w-full accent-primary"
+                    className="w-full accent-blue-500"
                   />
-                  <div className="flex justify-between text-xs text-muted-foreground">
-                    <span>1</span>
-                    <span>{profile.degree === "BS" || profile.degree === "BBA" ? 8 : 4}</span>
+                  <div className="flex justify-between text-xs text-slate-500">
+                    <span>1st</span>
+                    <span>{profile.degree === "BS" || profile.degree === "BBA" ? "8th" : "4th"}</span>
                   </div>
                 </div>
 
                 {/* CGPA slider */}
-                <div>
+                <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <Label htmlFor="cgpa">CGPA</Label>
-                    <span className="text-sm font-medium text-foreground">
+                    <label htmlFor="cgpa" className="text-sm font-semibold text-slate-200">
+                      CGPA
+                    </label>
+                    <span className="rounded-lg bg-blue-500/15 px-2.5 py-1 text-sm font-bold text-blue-400">
                       {profile.cgpa.toFixed(2)} / 4.0
                     </span>
                   </div>
@@ -589,9 +717,9 @@ function AnalyzePageContent() {
                     step={0.05}
                     value={profile.cgpa}
                     onChange={(e) => set("cgpa", Number(e.target.value))}
-                    className="mt-2 w-full accent-primary"
+                    className="w-full accent-blue-500"
                   />
-                  <div className="flex justify-between text-xs text-muted-foreground">
+                  <div className="flex justify-between text-xs text-slate-500">
                     <span>0.0</span>
                     <span>4.0</span>
                   </div>
@@ -600,14 +728,15 @@ function AnalyzePageContent() {
               </div>
             </FormSection>
 
-            <div className="h-px bg-border/60" />
+            <div className="h-px bg-white/8" />
 
             {/* Section 2 — Preferences */}
             <FormSection title="Preferences">
-              <div className="space-y-4">
-                <div>
-                  <Label htmlFor="skills">Skills</Label>
-                  <p className="mb-1.5 text-xs text-muted-foreground">Type a skill and press Enter</p>
+              <div className="space-y-5">
+
+                <div className="space-y-2">
+                  <label className="block text-sm font-semibold text-slate-200">Skills</label>
+                  <p className="text-xs text-slate-500">Type a skill and press Enter to add</p>
                   <TagInput
                     id="skills"
                     tags={profile.skills}
@@ -616,9 +745,9 @@ function AnalyzePageContent() {
                   />
                 </div>
 
-                <div>
-                  <Label htmlFor="interests">Interests</Label>
-                  <p className="mb-1.5 text-xs text-muted-foreground">Type an interest and press Enter</p>
+                <div className="space-y-2">
+                  <label className="block text-sm font-semibold text-slate-200">Interests</label>
+                  <p className="text-xs text-slate-500">Type an interest and press Enter to add</p>
                   <TagInput
                     id="interests"
                     tags={profile.interests}
@@ -628,9 +757,11 @@ function AnalyzePageContent() {
                 </div>
 
                 {/* Opportunity types */}
-                <div>
-                  <Label>Opportunity Types I Want</Label>
-                  <div className="mt-2 flex flex-wrap gap-2">
+                <div className="space-y-2">
+                  <label className="block text-sm font-semibold text-slate-200">
+                    Opportunity Types I Want
+                  </label>
+                  <div className="flex flex-wrap gap-2 pt-1">
                     {(Object.entries(OPPORTUNITY_TYPE_LABELS) as [OpportunityType, string][]).map(([type, label]) => {
                       const active = profile.opportunityTypes.includes(type);
                       return (
@@ -639,10 +770,10 @@ function AnalyzePageContent() {
                           type="button"
                           onClick={() => toggleOpportunityType(type)}
                           className={cn(
-                            "rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
+                            "rounded-lg border px-3 py-1.5 text-xs font-semibold transition-all",
                             active
-                              ? "border-primary/40 bg-primary/15 text-primary"
-                              : "border-border/70 bg-background text-muted-foreground hover:border-border hover:text-foreground",
+                              ? "border-blue-500/40 bg-blue-500/15 text-blue-300"
+                              : "border-white/10 bg-white/4 text-slate-400 hover:border-white/20 hover:text-white",
                           )}
                         >
                           {label}
@@ -653,40 +784,44 @@ function AnalyzePageContent() {
                 </div>
 
                 {/* Location preference */}
-                <div>
-                  <Label>Location Preference</Label>
-                  <div className="mt-2 flex flex-wrap gap-2">
+                <div className="space-y-2">
+                  <label className="block text-sm font-semibold text-slate-200">
+                    Location Preference
+                  </label>
+                  <div className="flex flex-wrap gap-3 pt-1">
                     {LOCATION_OPTIONS.map(({ value, label }) => (
-                      <label key={value} className="flex cursor-pointer items-center gap-1.5">
+                      <label key={value} className="flex cursor-pointer items-center gap-2">
                         <input
                           type="radio"
                           name="locationPreference"
                           value={value}
                           checked={profile.locationPreference === value}
                           onChange={() => set("locationPreference", value)}
-                          className="accent-primary"
+                          className="accent-blue-500 size-3.5"
                         />
-                        <span className="text-sm text-foreground">{label}</span>
+                        <span className="text-sm text-slate-300">{label}</span>
                       </label>
                     ))}
                   </div>
                 </div>
 
                 {/* Financial need */}
-                <div>
-                  <Label>Financial Need</Label>
-                  <div className="mt-2 flex flex-wrap gap-2">
+                <div className="space-y-2">
+                  <label className="block text-sm font-semibold text-slate-200">
+                    Financial Need
+                  </label>
+                  <div className="flex flex-wrap gap-3 pt-1">
                     {FINANCIAL_OPTIONS.map(({ value, label }) => (
-                      <label key={value} className="flex cursor-pointer items-center gap-1.5">
+                      <label key={value} className="flex cursor-pointer items-center gap-2">
                         <input
                           type="radio"
                           name="financialNeed"
                           value={value}
                           checked={profile.financialNeed === value}
                           onChange={() => set("financialNeed", value)}
-                          className="accent-primary"
+                          className="accent-blue-500 size-3.5"
                         />
-                        <span className="text-sm text-foreground">{label}</span>
+                        <span className="text-sm text-slate-300">{label}</span>
                       </label>
                     ))}
                   </div>
@@ -694,7 +829,7 @@ function AnalyzePageContent() {
               </div>
             </FormSection>
 
-            <div className="h-px bg-border/60" />
+            <div className="h-px bg-white/8" />
 
             {/* Section 3 — Experience */}
             <FormSection title="Past Experience">
@@ -704,29 +839,57 @@ function AnalyzePageContent() {
               />
             </FormSection>
 
+            {/* Save profile button */}
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={handleSaveProfile}
+                disabled={profileSaving}
+                className={cn(
+                  "flex flex-1 items-center justify-center gap-2 rounded-xl border py-3 text-sm font-semibold transition-all",
+                  profileSaved
+                    ? "border-green-500/30 bg-green-500/10 text-green-400"
+                    : "border-white/10 bg-white/5 text-slate-400 hover:border-white/20 hover:bg-white/8 hover:text-white",
+                )}
+              >
+                {profileSaving ? (
+                  <><Loader2Icon className="size-4 animate-spin" /> Saving…</>
+                ) : profileSaved ? (
+                  <><CheckCircle2Icon className="size-4" /> Profile Saved!</>
+                ) : (
+                  <><SaveIcon className="size-4" /> Save Profile</>
+                )}
+              </button>
+              {profileLoaded && (
+                <span className="rounded-lg border border-blue-500/20 bg-blue-500/8 px-3 py-2.5 text-xs font-semibold text-blue-400">
+                  ✓ Loaded
+                </span>
+              )}
+            </div>
+
             {/* API error */}
             {apiError && (
-              <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
                 {apiError}
               </div>
             )}
 
             {/* Submit */}
-            <Button
+            <button
               type="button"
               onClick={handleSubmit}
               disabled={isAnalyzing}
-              className="h-12 w-full gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-sm font-semibold text-white shadow-lg shadow-blue-500/20 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-60"
+              className="group flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-600 py-4 text-base font-bold text-white shadow-xl shadow-blue-500/25 transition-all hover:-translate-y-0.5 hover:shadow-blue-500/40 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
             >
               {isAnalyzing ? (
-                <><Loader2Icon className="size-4 animate-spin" /> Analyzing…</>
+                <><Loader2Icon className="size-5 animate-spin" /> Analyzing…</>
               ) : (
-                <>Analyze My Inbox <ArrowRightIcon className="size-4" /></>
+                <>Analyze My Inbox <ArrowRightIcon className="size-5 transition-transform group-hover:translate-x-0.5" /></>
               )}
-            </Button>
+            </button>
 
-            <p className="text-center text-xs text-muted-foreground">
-              Emails are processed in memory · Sessions expire in 30 min
+            <p className="text-center text-xs text-slate-600">
+              Emails processed in memory · Sessions expire in 30 min
             </p>
           </div>
         </div>

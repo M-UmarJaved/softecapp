@@ -1,37 +1,29 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { SendHorizontalIcon, Loader2Icon, BotIcon, UserIcon, SparklesIcon } from "lucide-react";
+import { SendHorizontalIcon, BotIcon, UserIcon, SparklesIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-type Message = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-};
+type Message = { id: string; role: "user" | "assistant"; content: string };
 
-// ─── Typing indicator ─────────────────────────────────────────────────────────
-
-function TypingIndicator() {
+function ThinkingDots() {
   return (
     <div className="flex items-end gap-2">
       <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
         <BotIcon className="size-4" />
       </span>
-      <div className="rounded-2xl rounded-bl-md border border-border/60 bg-card px-4 py-3">
+      <div className="rounded-2xl rounded-bl-md border border-border/60 bg-card px-4 py-3.5">
         <div className="flex items-center gap-1.5">
-          <span className="size-2 animate-bounce rounded-full bg-primary/60 [animation-delay:-0.3s]" />
-          <span className="size-2 animate-bounce rounded-full bg-primary/60 [animation-delay:-0.15s]" />
-          <span className="size-2 animate-bounce rounded-full bg-primary/60" />
-          <span className="ml-2 text-xs text-muted-foreground">Grok is thinking…</span>
+          <span className="size-2 rounded-full bg-primary/70 animate-bounce [animation-delay:0ms]" />
+          <span className="size-2 rounded-full bg-primary/70 animate-bounce [animation-delay:150ms]" />
+          <span className="size-2 rounded-full bg-primary/70 animate-bounce [animation-delay:300ms]" />
+          <span className="ml-2 text-xs text-muted-foreground italic">AI is thinking…</span>
         </div>
       </div>
     </div>
   );
 }
-
-// ─── Message bubble ───────────────────────────────────────────────────────────
 
 function MessageBubble({ msg, isStreaming }: { msg: Message; isStreaming?: boolean }) {
   const isUser = msg.role === "user";
@@ -50,9 +42,8 @@ function MessageBubble({ msg, isStreaming }: { msg: Message; isStreaming?: boole
       )}>
         <p className="whitespace-pre-wrap break-words">
           {msg.content}
-          {/* Blinking cursor while streaming */}
-          {isStreaming && (
-            <span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse bg-current align-middle" />
+          {isStreaming && msg.content.length > 0 && (
+            <span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse bg-current align-middle opacity-70" />
           )}
         </p>
       </div>
@@ -65,37 +56,32 @@ function MessageBubble({ msg, isStreaming }: { msg: Message; isStreaming?: boole
   );
 }
 
-// ─── Suggested prompts ────────────────────────────────────────────────────────
-
 const SUGGESTIONS = [
   "What scholarships should I apply for first?",
-  "How can I improve my CGPA for better opportunities?",
-  "What documents do I need for a scholarship application?",
-  "Explain the difference between a fellowship and an internship",
+  "How can I improve my profile for better opportunities?",
+  "What documents do I need for a scholarship?",
+  "Difference between a fellowship and internship?",
 ];
 
-// ─── Page ─────────────────────────────────────────────────────────────────────
-
 export default function DashboardChatPage() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "intro",
-      role: "assistant",
-      content: "Hi! I'm your Opportunity Coach powered by Grok AI. Ask me about scholarships, internships, deadlines, how to improve your profile, or anything about your opportunities.",
-    },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([{
+    id: "intro", role: "assistant",
+    content: "Hi! I'm your Opportunity Coach powered by Groq AI. Ask me about scholarships, internships, deadlines, or how to improve your profile.",
+  }]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isThinking, setIsThinking] = useState(false);
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const unmountedRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Use a ref to track accumulated content — avoids stale closure in stream loop
+  const accumulatedRef = useRef("");
 
   useEffect(() => () => { unmountedRef.current = true; }, []);
-
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isLoading]);
+  }, [messages, isThinking]);
 
   const send = async (text?: string) => {
     const content = (text ?? input).trim();
@@ -104,18 +90,24 @@ export default function DashboardChatPage() {
     const userMsg: Message = { id: `u-${Date.now()}`, role: "user", content };
     const assistantId = `a-${Date.now()}`;
 
-    // Add user message — keep assistant placeholder OUT until we start streaming
-    setMessages((prev) => [...prev, userMsg]);
+    // Reset accumulated ref
+    accumulatedRef.current = "";
+
+    // Add user message + empty assistant slot in ONE state update
+    setMessages((prev) => [
+      ...prev,
+      userMsg,
+      { id: assistantId, role: "assistant", content: "" },
+    ]);
     setInput("");
     setIsLoading(true);
-
-    // Small delay so the typing indicator shows before streaming starts
-    await new Promise((r) => setTimeout(r, 100));
-
-    // Now add the empty assistant message and mark it as streaming
-    const assistantMsg: Message = { id: assistantId, role: "assistant", content: "" };
-    setMessages((prev) => [...prev, assistantMsg]);
+    setIsThinking(true);
     setStreamingId(assistantId);
+
+    // Reset textarea height
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+    }
 
     try {
       const res = await fetch("/api/ai/generate", {
@@ -124,63 +116,70 @@ export default function DashboardChatPage() {
         body: JSON.stringify({
           theme: "opportunity-coach",
           useDemoFallback: true,
-          messages: [
-            ...[...messages, userMsg].slice(-8).map((m) => ({
-              role: m.role,
-              content: m.content,
-            })),
-          ],
+          // Build context from messages BEFORE the new ones were added
+          messages: [...messages, userMsg].slice(-10).map((m) => ({
+            role: m.role,
+            content: m.content,
+          })),
         }),
       });
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: "Unknown error" })) as { error?: string };
+        const err = await res.json().catch(() => ({})) as { error?: string };
         throw new Error(err.error ?? `HTTP ${res.status}`);
       }
+      if (!res.body) throw new Error("No response body from server");
 
-      if (!res.body) throw new Error("No response body");
+      // Hide thinking dots — first chunk is about to arrive
+      setIsThinking(false);
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
-      let accumulated = "";
 
       while (true) {
         const { done, value } = await reader.read();
         if (done || unmountedRef.current) break;
 
-        accumulated += decoder.decode(value, { stream: true });
+        const chunk = decoder.decode(value, { stream: true });
+        accumulatedRef.current += chunk;
 
+        // Capture current value for the state update closure
+        const currentContent = accumulatedRef.current;
         setMessages((prev) =>
-          prev.map((m) => m.id === assistantId ? { ...m, content: accumulated } : m),
+          prev.map((m) => m.id === assistantId ? { ...m, content: currentContent } : m),
         );
       }
+
+      // Flush any remaining bytes
+      const remaining = decoder.decode();
+      if (remaining) {
+        accumulatedRef.current += remaining;
+        const finalContent = accumulatedRef.current;
+        setMessages((prev) =>
+          prev.map((m) => m.id === assistantId ? { ...m, content: finalContent } : m),
+        );
+      }
+
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : "Unknown error";
+      setIsThinking(false);
+      const errMsg = err instanceof Error ? err.message : "Unknown error";
+      const errContent =
+        errMsg.includes("401") || errMsg.includes("key") || errMsg.includes("API")
+          ? "API key error — check GROK_API_KEY in .env.local and restart the server."
+          : `Sorry, I couldn't get a response right now. Error: ${errMsg}`;
+
       setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId
-            ? {
-                ...m,
-                content: `Sorry, I couldn't get a response right now.\n\n${
-                  errorMsg.includes("API key") || errorMsg.includes("401")
-                    ? "Make sure GROK_API_KEY is set in your .env.local file."
-                    : `Error: ${errorMsg}`
-                }`,
-              }
-            : m,
-        ),
+        prev.map((m) => m.id === assistantId ? { ...m, content: errContent } : m),
       );
     } finally {
       if (!unmountedRef.current) {
         setIsLoading(false);
+        setIsThinking(false);
         setStreamingId(null);
-        // Refocus textarea
-        setTimeout(() => textareaRef.current?.focus(), 50);
+        setTimeout(() => textareaRef.current?.focus(), 100);
       }
     }
   };
-
-  const showSuggestions = messages.length === 1; // only show after intro
 
   return (
     <div className="flex h-[calc(100vh-8rem)] flex-col overflow-hidden rounded-2xl border border-border/70 bg-card/60 backdrop-blur-sm">
@@ -194,16 +193,17 @@ export default function DashboardChatPage() {
             </span>
             <div>
               <p className="font-heading text-sm font-semibold text-foreground">Opportunity Coach</p>
-              <p className="text-xs text-muted-foreground">Powered by Grok AI</p>
+              <p className="text-xs text-muted-foreground">Powered by Groq AI · llama-3.1-8b-instant</p>
             </div>
           </div>
-          {/* Live indicator */}
           <div className="flex items-center gap-1.5 rounded-full border border-border/60 bg-secondary/40 px-2.5 py-1 text-[10px] text-muted-foreground">
             <span className={cn(
-              "size-1.5 rounded-full",
-              isLoading ? "animate-pulse bg-yellow-400" : "bg-green-400",
+              "size-1.5 rounded-full transition-colors",
+              isThinking ? "animate-pulse bg-yellow-400"
+              : isLoading  ? "animate-pulse bg-blue-400"
+              : "bg-green-400",
             )} />
-            {isLoading ? "Thinking…" : "Online"}
+            {isThinking ? "Thinking…" : isLoading ? "Streaming…" : "Online"}
           </div>
         </div>
       </div>
@@ -218,26 +218,19 @@ export default function DashboardChatPage() {
           />
         ))}
 
-        {/* Typing indicator — shows BEFORE the assistant message appears */}
-        {isLoading && streamingId === null && (
-          <TypingIndicator />
-        )}
+        {/* Thinking dots — only while waiting for first byte */}
+        {isThinking && <ThinkingDots />}
 
-        {/* Suggested prompts */}
-        {showSuggestions && !isLoading && (
+        {/* Suggestions — only on fresh chat */}
+        {messages.length === 1 && !isLoading && (
           <div className="space-y-2 pt-2">
             <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-              <SparklesIcon className="size-3" />
-              Try asking
+              <SparklesIcon className="size-3" /> Try asking
             </p>
             <div className="flex flex-wrap gap-2">
               {SUGGESTIONS.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => send(s)}
-                  className="rounded-xl border border-border/60 bg-secondary/40 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/30 hover:bg-primary/5 hover:text-foreground"
-                >
+                <button key={s} type="button" onClick={() => send(s)}
+                  className="rounded-xl border border-border/60 bg-secondary/40 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/30 hover:bg-primary/5 hover:text-foreground">
                   {s}
                 </button>
               ))}
@@ -250,25 +243,18 @@ export default function DashboardChatPage() {
 
       {/* Input */}
       <div className="border-t border-border/70 bg-card/30 p-4">
-        <form
-          onSubmit={(e) => { e.preventDefault(); send(); }}
-          className="flex items-end gap-2"
-        >
+        <form onSubmit={(e) => { e.preventDefault(); send(); }} className="flex items-end gap-2">
           <textarea
             ref={textareaRef}
             rows={1}
             value={input}
             onChange={(e) => {
               setInput(e.target.value);
-              // Auto-resize
               e.target.style.height = "auto";
               e.target.style.height = `${Math.min(e.target.scrollHeight, 144)}px`;
             }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                send();
-              }
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
             }}
             placeholder="Ask about scholarships, deadlines, profile tips…"
             disabled={isLoading}
@@ -278,12 +264,17 @@ export default function DashboardChatPage() {
             type="submit"
             disabled={isLoading || !input.trim()}
             className="h-10 shrink-0 px-3"
-            aria-label="Send message"
+            aria-label="Send"
           >
-            {isLoading
-              ? <Loader2Icon className="size-4 animate-spin" />
-              : <SendHorizontalIcon className="size-4" />
-            }
+            {isLoading ? (
+              <span className="flex gap-0.5">
+                <span className="size-1.5 rounded-full bg-current animate-bounce [animation-delay:0ms]" />
+                <span className="size-1.5 rounded-full bg-current animate-bounce [animation-delay:150ms]" />
+                <span className="size-1.5 rounded-full bg-current animate-bounce [animation-delay:300ms]" />
+              </span>
+            ) : (
+              <SendHorizontalIcon className="size-4" />
+            )}
           </Button>
         </form>
         <p className="mt-2 text-center text-[10px] text-muted-foreground">
