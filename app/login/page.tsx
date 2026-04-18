@@ -211,11 +211,15 @@ function LoginPageContent() {
       <div className="landing-content w-full max-w-md">
         <Card className="surface-glass border-border/70 shadow-2xl">
           <CardHeader className="space-y-2">
-            <CardTitle className="font-heading text-2xl">Welcome to Fortress</CardTitle>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground text-sm font-bold">OI</span>
+              <span className="font-heading text-sm font-semibold text-muted-foreground tracking-wide">Opportunity Inbox Copilot</span>
+            </div>
+            <CardTitle className="font-heading text-2xl">Welcome back</CardTitle>
             <CardDescription>
               {redirectedFrom
                 ? `Sign in to continue to ${redirectedFrom}.`
-                : "Sign in, create an account, or request a magic link."}
+                : "Sign in or create an account to save your analysis results."}
             </CardDescription>
           </CardHeader>
 

@@ -23,11 +23,11 @@ type NavItem = {
 };
 
 const navItems: NavItem[] = [
-  { label: "Overview", href: "/dashboard", icon: HomeIcon },
-  { label: "Inbox Copilot", href: "/dashboard/opportunities", icon: InboxIcon },
-  { label: "AI Coach", href: "/dashboard/chat", icon: MessageSquareIcon },
-  { label: "Insights", href: "/dashboard/analytics", icon: BarChart3Icon },
-  { label: "Waitlist", href: "/dashboard/waitlist", icon: UsersIcon },
+  { label: "Overview",      href: "/dashboard",              icon: HomeIcon },
+  { label: "Analyze",       href: "/analyze",                icon: InboxIcon },
+  { label: "AI Coach",      href: "/dashboard/chat",         icon: MessageSquareIcon },
+  { label: "Insights",      href: "/dashboard/analytics",    icon: BarChart3Icon },
+  { label: "Waitlist",      href: "/dashboard/waitlist",     icon: UsersIcon },
 ];
 
 function isActive(pathname: string, href: string) {

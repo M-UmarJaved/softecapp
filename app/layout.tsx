@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { Inter, Manrope } from "next/font/google";
 
 import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -7,25 +6,13 @@ import { APP_THEMES, DEFAULT_THEME, THEME_STORAGE_KEY } from "@/lib/theme";
 
 import "./globals.css";
 
-const inter = Inter({
-  variable: "--font-inter",
-  subsets: ["latin"],
-  display: "swap",
-});
-
-const manrope = Manrope({
-  variable: "--font-manrope",
-  subsets: ["latin"],
-  display: "swap",
-});
-
 export const metadata: Metadata = {
   title: {
-    default: "Softec AI Starter",
-    template: "%s | Softec AI Starter",
+    default: "Opportunity Inbox Copilot",
+    template: "%s | Opportunity Inbox Copilot",
   },
   description:
-    "Hackathon-ready AI starter with Supabase auth, dashboard widgets, and Grok-ready API wiring.",
+    "AI-powered email ranking for Pakistani students — find scholarships, internships, and competitions before deadlines pass.",
 };
 
 const themeInitScript = `
@@ -56,12 +43,11 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${inter.variable} ${manrope.variable} h-full antialiased`}
+      className="h-full antialiased"
       suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col" suppressHydrationWarning>
         <script id="theme-init" dangerouslySetInnerHTML={{ __html: themeInitScript }} />
-
         <ThemeProvider>
           {children}
           <ThemeToggle />
