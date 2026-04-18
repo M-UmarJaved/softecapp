@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 import { useApplied } from "@/lib/use-applied";
 import { downloadICS } from "@/lib/ics";
 import type { AnalyzeOpportunitiesResponse, RankedOpportunity } from "@/lib/opportunity-inbox/types";
+import type { SessionData } from "@/lib/session-store";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -406,7 +407,9 @@ function FullOpportunityCard({
 
 // ─── Skipped emails section ───────────────────────────────────────────────────
 
-function SkippedSection({ skipped }: { skipped: RankedOpportunity[] }) {
+type SkippedEmail = { id: string; subject: string; reason: string; confidence: number };
+
+function SkippedSection({ skipped }: { skipped: SkippedEmail[] }) {
   const [open, setOpen] = useState(false);
   if (skipped.length === 0) return null;
 
@@ -420,7 +423,7 @@ function SkippedSection({ skipped }: { skipped: RankedOpportunity[] }) {
         <div className="flex items-center gap-2">
           <XCircleIcon className="size-4 text-muted-foreground" />
           <span className="text-sm font-medium text-foreground">
-            {skipped.length} email{skipped.length !== 1 ? "s" : ""} skipped as non-opportunity
+            {skipped.length} email{skipped.length !== 1 ? "s" : ""} filtered as spam / non-opportunity
           </span>
         </div>
         {open ? <ChevronUpIcon className="size-4 text-muted-foreground" /> : <ChevronDownIcon className="size-4 text-muted-foreground" />}
@@ -428,17 +431,15 @@ function SkippedSection({ skipped }: { skipped: RankedOpportunity[] }) {
 
       {open && (
         <div className="divide-y divide-border/50 border-t border-border/60">
-          {skipped.map((opp) => (
-            <div key={opp.id} className="px-5 py-3">
-              <p className="text-sm font-medium text-foreground">{opp.title}</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Confidence: {Math.round(opp.confidence * 100)}% · Classified as non-opportunity
-              </p>
-              {opp.signals.length > 0 && (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Reason: {opp.signals[0]}
-                </p>
-              )}
+          {skipped.map((item) => (
+            <div key={item.id} className="flex items-start justify-between gap-3 px-5 py-3">
+              <div>
+                <p className="text-sm font-medium text-foreground">{item.subject || "No subject"}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">{item.reason}</p>
+              </div>
+              <span className="shrink-0 rounded-full border border-destructive/30 bg-destructive/10 px-2 py-0.5 text-[10px] font-semibold text-destructive">
+                {Math.round(item.confidence * 100)}% spam
+              </span>
             </div>
           ))}
         </div>
@@ -503,7 +504,7 @@ function printReport(opps: RankedOpportunity[], sessionId: string) {
 // ─── Main view ────────────────────────────────────────────────────────────────
 
 type Props = {
-  data: AnalyzeOpportunitiesResponse;
+  data: SessionData;
   sessionId: string;
 };
 

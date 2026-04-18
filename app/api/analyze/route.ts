@@ -29,6 +29,7 @@ type RankedResult = ExtractedOpportunitySpec & {
 type AnalyzeResponse = {
   sessionId: string;
   results: RankedResult[];
+  skippedEmails: Array<{ id: string; subject: string; reason: string; confidence: number }>;
   totalOpportunitiesFound: number;
   topOpportunity: string | null;
   generatedAt: string;
@@ -221,7 +222,129 @@ function heuristicExtract(email: RawEmail): ExtractedOpportunitySpec {
   };
 }
 
-// ─── Single-email Grok extraction ────────────────────────────────────────────
+// ─── Spam / classification ────────────────────────────────────────────────────
+
+const SPAM_SIGNALS = [
+  "won a prize", "free macbook", "free iphone", "claim your prize",
+  "click here to claim", "limited offer", "you have been selected to receive a free",
+  "suspicious", "congratulations! you have won",
+  "50% off", "weekend sale", "promo code", "discount code",
+  "shop now", "use code", "offer valid till",
+];
+
+const OPPORTUNITY_SIGNALS = [
+  "scholarship", "internship", "fellowship", "competition", "hackathon",
+  "challenge", "conference", "workshop", "bootcamp", "admission",
+  "apply", "deadline", "eligibility", "stipend", "grant", "program",
+  "cgpa", "gpa", "semester", "university", "register",
+];
+
+type ClassifiedEmail = {
+  email: RawEmail;
+  isOpportunity: boolean;
+  confidence: number;
+  reason: string;
+};
+
+async function classifyEmails(
+  emails: RawEmail[],
+  useFallback: boolean,
+): Promise<ClassifiedEmail[]> {
+  // Always run heuristic first as baseline
+  const heuristic = emails.map((email): ClassifiedEmail => {
+    const text = `${email.subject ?? ""} ${email.body}`.toLowerCase();
+    const spamHits = SPAM_SIGNALS.filter((s) => text.includes(s)).length;
+    const oppHits  = OPPORTUNITY_SIGNALS.filter((s) => text.includes(s)).length;
+
+    if (spamHits >= 2 || (spamHits >= 1 && oppHits === 0)) {
+      return {
+        email,
+        isOpportunity: false,
+        confidence: Math.min(0.95, 0.6 + spamHits * 0.1),
+        reason: `Spam signals detected: ${SPAM_SIGNALS.filter((s) => text.includes(s)).join(", ")}`,
+      };
+    }
+
+    if (oppHits >= 2) {
+      return {
+        email,
+        isOpportunity: true,
+        confidence: Math.min(0.95, 0.6 + oppHits * 0.05),
+        reason: `Opportunity signals: ${OPPORTUNITY_SIGNALS.filter((s) => text.includes(s)).slice(0, 4).join(", ")}`,
+      };
+    }
+
+    // Ambiguous — treat as opportunity with low confidence
+    return {
+      email,
+      isOpportunity: oppHits > 0,
+      confidence: 0.5,
+      reason: oppHits > 0 ? "Weak opportunity signals detected" : "No clear opportunity signals",
+    };
+  });
+
+  if (!hasGrokKey()) return heuristic;
+
+  // Use Grok for fast classification on ambiguous emails
+  const ambiguous = heuristic.filter((c) => c.confidence < 0.75);
+  if (ambiguous.length === 0) return heuristic;
+
+  try {
+    const client = getGrokClient();
+    const completion = await client.chat.completions.create({
+      model: "grok-3-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are an email classifier. For each email, determine if it is a genuine student opportunity " +
+            "(scholarship, internship, competition, fellowship, admission, conference, grant, workshop, job) " +
+            "or spam/promotional. " +
+            "Return ONLY a JSON array: [{\"id\": string, \"isOpportunity\": boolean, \"confidence\": number, \"reason\": string}]. " +
+            "No markdown.",
+        },
+        {
+          role: "user",
+          content: JSON.stringify(
+            ambiguous.map((c) => ({
+              id: c.email.id,
+              subject: c.email.subject,
+              body: c.email.body.slice(0, 300),
+            })),
+          ),
+        },
+      ],
+    });
+
+    const content = completion.choices[0]?.message?.content ?? "";
+    const firstBracket = content.indexOf("[");
+    const lastBracket  = content.lastIndexOf("]");
+    if (firstBracket < 0) throw new Error("No JSON array in response");
+
+    const parsed = JSON.parse(content.slice(firstBracket, lastBracket + 1)) as Array<{
+      id: string;
+      isOpportunity: boolean;
+      confidence: number;
+      reason: string;
+    }>;
+
+    // Merge Grok results back
+    const grokMap = new Map(parsed.map((r) => [r.id, r]));
+    return heuristic.map((c) => {
+      const grok = grokMap.get(c.email.id);
+      if (!grok) return c;
+      return {
+        email: c.email,
+        isOpportunity: grok.isOpportunity,
+        confidence: grok.confidence,
+        reason: grok.reason,
+      };
+    });
+  } catch {
+    return heuristic;
+  }
+}
 
 async function extractOne(
   email: RawEmail,
@@ -365,16 +488,25 @@ export async function POST(request: Request) {
   const { emails, profile, useDemoFallback } = validated;
 
   try {
-    // 1. Extract all emails in parallel (grok-3 per email, or heuristic fallback)
+    // 1. Classify all emails — detect spam before extraction
+    const classified = await classifyEmails(emails, useDemoFallback);
+    const opportunityEmails = classified.filter((c) => c.isOpportunity).map((c) => c.email);
+    const skippedEmails = classified
+      .filter((c) => !c.isOpportunity)
+      .map((c) => ({
+        id:         c.email.id,
+        subject:    c.email.subject ?? "No subject",
+        reason:     c.reason,
+        confidence: c.confidence,
+      }));
+
+    // 2. Extract only genuine opportunity emails
     const extracted = await Promise.all(
-      emails.map((email) => extractOne(email, profile, useDemoFallback)),
+      opportunityEmails.map((email) => extractOne(email, profile, useDemoFallback)),
     );
 
-    // 2. Filter to genuine opportunities only
-    const opportunities = extracted.filter((e) => e.isOpportunity);
-
     // 3. Score each with the deterministic engine
-    const scored = opportunities.map((opp) => ({
+    const scored = extracted.map((opp) => ({
       opp,
       score: scoreOpportunity(opp, profile),
     }));
@@ -401,11 +533,9 @@ export async function POST(request: Request) {
     const sessionId = crypto.randomUUID();
     const topOpportunity = withExplanations[0]?.emailId ?? null;
 
-    // 6. Persist to session store (compatible shape for results page)
-    // We store a lightweight snapshot so the existing results page still works
-    saveSession(sessionId, {
+    // 6. Build the session data including skipped emails
+    const sessionData = {
       opportunities: withExplanations.map((r) => ({
-        // Map spec fields → pipeline RankedOpportunity shape for the results page
         id:              r.emailId,
         sourceEmailId:   r.emailId,
         title:           r.title,
@@ -437,29 +567,33 @@ export async function POST(request: Request) {
           task:     item.action,
           evidence: item.deadline ?? "",
         })),
+        aiExplanation:   r.aiExplanation,
       })),
-      extractedCount: opportunities.length,
+      skippedEmails,
+      extractedCount: opportunityEmails.length,
       generatedAt:    new Date().toISOString(),
-      provider:       hasGrokKey() ? "grok" : "heuristic-fallback",
+      provider:       hasGrokKey() ? "grok" as const : "heuristic-fallback" as const,
       summary: {
         generatedAt:         new Date().toISOString(),
-        provider:            hasGrokKey() ? "grok" : "heuristic-fallback",
+        provider:            hasGrokKey() ? "grok" as const : "heuristic-fallback" as const,
         totalEmails:         emails.length,
-        totalOpportunities:  opportunities.length,
+        totalOpportunities:  withExplanations.length,
         topScore:            withExplanations[0]?.score.totalScore ?? 0,
         avgScore:            withExplanations.length
           ? Math.round(withExplanations.reduce((s, r) => s + r.score.totalScore, 0) / withExplanations.length)
           : 0,
       },
-    });
+    };
+
+    saveSession(sessionId, sessionData);
 
     // Persist to Supabase — fire-and-forget, never blocks the response
     saveSessionToDb({
       sessionId,
       profile,
       emails,
-      results:            withExplanations,
-      totalOpportunities: opportunities.length,
+      results:            { opportunities: sessionData.opportunities, skippedEmails },
+      totalOpportunities: withExplanations.length,
       topOpportunityId:   topOpportunity,
     }).catch((err: unknown) => {
       console.warn("[analyze] DB persist failed (non-fatal):", err instanceof Error ? err.message : err);
@@ -468,7 +602,8 @@ export async function POST(request: Request) {
     const response: AnalyzeResponse = {
       sessionId,
       results:                 withExplanations,
-      totalOpportunitiesFound: opportunities.length,
+      skippedEmails,
+      totalOpportunitiesFound: withExplanations.length,
       topOpportunity,
       generatedAt:             new Date().toISOString(),
       provider:                hasGrokKey() ? "grok" : "heuristic-fallback",

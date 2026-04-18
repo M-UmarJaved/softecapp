@@ -1,12 +1,11 @@
-/**
- * In-memory session store for analysis results.
- * Keyed by sessionId (UUID). Entries expire after 30 minutes.
- * This is sufficient for a hackathon demo — no DB needed for results.
- */
 import type { AnalyzeOpportunitiesResponse } from "@/lib/opportunity-inbox/types";
 
+export type SessionData = AnalyzeOpportunitiesResponse & {
+  skippedEmails?: Array<{ id: string; subject: string; reason: string; confidence: number }>;
+};
+
 type SessionEntry = {
-  data: AnalyzeOpportunitiesResponse;
+  data: SessionData;
   expiresAt: number;
 };
 
@@ -14,7 +13,7 @@ declare global {
   var __analysisSessionStore: Map<string, SessionEntry> | undefined;
 }
 
-const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const SESSION_TTL_MS = 30 * 60 * 1000;
 
 const store: Map<string, SessionEntry> =
   globalThis.__analysisSessionStore ?? new Map();
@@ -27,12 +26,12 @@ function purgeExpired() {
   }
 }
 
-export function saveSession(sessionId: string, data: AnalyzeOpportunitiesResponse): void {
+export function saveSession(sessionId: string, data: SessionData): void {
   purgeExpired();
   store.set(sessionId, { data, expiresAt: Date.now() + SESSION_TTL_MS });
 }
 
-export function getSession(sessionId: string): AnalyzeOpportunitiesResponse | null {
+export function getSession(sessionId: string): SessionData | null {
   purgeExpired();
   return store.get(sessionId)?.data ?? null;
 }
